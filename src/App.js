@@ -1,12 +1,17 @@
 import { useMemo, useState } from 'react';
 import './App.css';
 import CourseForm from './components/CourseForm';
+import CourseTable from './components/CourseTable';
 import RegistrationForm from './components/RegistrationForm';
 import RegistrationTable from './components/RegistrationTable';
 import StatCard from './components/StatCard';
 import StudentTable from './components/StudentTable';
+import TopBar from './components/TopBar';
 import { useAdmissionData } from './hooks/useAdmissionData';
-import { apiFetch, API_BASE_URL } from './services/api';
+import { useAdmissionMutations } from './hooks/useAdmissionMutations';
+import { useCourseForm } from './hooks/useCourseForm';
+import { useDecisionForm } from './hooks/useDecisionForm';
+import { useRegistrationForm } from './hooks/useRegistrationForm';
 
 const emptyCourseForm = () => ({
   name: '',
@@ -33,14 +38,16 @@ const emptyStudentForm = () => ({
 
 function App() {
   const { courses, students, registrations, loading, error, refreshData } = useAdmissionData();
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [courseForm, setCourseForm] = useState(emptyCourseForm());
-  const [selectedCourseId, setSelectedCourseId] = useState(null);
-  const [registrationForm, setRegistrationForm] = useState({
+  const { createCourse, updateCourse, deleteCourse, createRegistration, updateDecision } = useAdmissionMutations(refreshData);
+  const { form: courseForm, setForm: setCourseForm, reset: resetCourseForm, handleChange: handleCourseInputChange } = useCourseForm(emptyCourseForm());
+  const { form: registrationForm, reset: resetRegistrationForm, handleChange: handleRegistrationInputChange } = useRegistrationForm({
     courseId: '',
     student: emptyStudentForm(),
   });
-  const [decisionDrafts, setDecisionDrafts] = useState({});
+  const { decisionDrafts, updateDecisionDraft } = useDecisionForm();
+
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [selectedCourseId, setSelectedCourseId] = useState(null);
   const [notice, setNotice] = useState({ type: '', message: '' });
 
   const summary = useMemo(() => {
@@ -57,32 +64,6 @@ function App() {
     };
   }, [courses, students, registrations]);
 
-  const handleCourseInputChange = (event) => {
-    const { name, value, type, checked } = event.target;
-    setCourseForm((prev) => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
-  };
-
-  const handleRegistrationInputChange = (event) => {
-    const { name, value, type, checked } = event.target;
-    const nextValue = type === 'checkbox' ? checked : value;
-
-    if (name === 'courseId') {
-      setRegistrationForm((prev) => ({ ...prev, courseId: value }));
-      return;
-    }
-
-    setRegistrationForm((prev) => ({
-      ...prev,
-      student: {
-        ...prev.student,
-        [name]: nextValue,
-      },
-    }));
-  };
-
   const handleCourseSubmit = async (event) => {
     event.preventDefault();
     setNotice({ type: '', message: '' });
@@ -91,22 +72,15 @@ function App() {
       const payload = { ...courseForm };
 
       if (selectedCourseId) {
-        await apiFetch(`/api/courses/${selectedCourseId}`, {
-          method: 'PUT',
-          body: JSON.stringify(payload),
-        });
+        await updateCourse(selectedCourseId, payload);
         setNotice({ type: 'success', message: 'Course updated successfully.' });
       } else {
-        await apiFetch('/api/courses', {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        });
+        await createCourse(payload);
         setNotice({ type: 'success', message: 'Course created successfully.' });
       }
 
-      setCourseForm(emptyCourseForm());
+      resetCourseForm();
       setSelectedCourseId(null);
-      await refreshData();
     } catch (err) {
       setNotice({ type: 'error', message: err.message });
     }
@@ -126,9 +100,8 @@ function App() {
     if (!window.confirm('Delete this course?')) return;
 
     try {
-      await apiFetch(`/api/courses/${courseId}`, { method: 'DELETE' });
+      await deleteCourse(courseId);
       setNotice({ type: 'success', message: 'Course deleted successfully.' });
-      await refreshData();
     } catch (err) {
       setNotice({ type: 'error', message: err.message });
     }
@@ -151,30 +124,12 @@ function App() {
         student: payloadStudent,
       };
 
-      await apiFetch('/api/registrations', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-
+      await createRegistration(payload);
       setNotice({ type: 'success', message: 'Student registered successfully.' });
-      setRegistrationForm({
-        courseId: '',
-        student: emptyStudentForm(),
-      });
-      await refreshData();
+      resetRegistrationForm();
     } catch (err) {
       setNotice({ type: 'error', message: err.message });
     }
-  };
-
-  const updateDecisionDraft = (registrationId, field, value) => {
-    setDecisionDrafts((prev) => ({
-      ...prev,
-      [registrationId]: {
-        ...(prev[registrationId] || { status: 'PENDING', batch: '' }),
-        [field]: value,
-      },
-    }));
   };
 
   const handleDecisionSubmit = async (registrationId) => {
@@ -189,13 +144,8 @@ function App() {
         payload.batch = draft.batch.trim();
       }
 
-      await apiFetch(`/api/registrations/${registrationId}/decision`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      });
-
+      await updateDecision(registrationId, payload);
       setNotice({ type: 'success', message: 'Admission decision updated successfully.' });
-      await refreshData();
     } catch (err) {
       setNotice({ type: 'error', message: err.message });
     }
@@ -211,13 +161,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Admissions portal</p>
-          <h1>Student Admission System</h1>
-        </div>
-        <div className="topbar-badge">API: {API_BASE_URL}</div>
-      </header>
+      <TopBar />
 
       {notice.message && <div className={`notice ${notice.type}`}>{notice.message}</div>}
       {error && <div className="notice error">{error}</div>}
@@ -238,53 +182,12 @@ function App() {
             onSubmit={handleCourseSubmit}
             onCancel={() => {
               setSelectedCourseId(null);
-              setCourseForm(emptyCourseForm());
+              resetCourseForm();
             }}
             selectedCourseId={selectedCourseId}
           />
 
-          <section className="panel list-panel">
-            <h3>Courses</h3>
-            {courses.length === 0 ? (
-              <p className="empty-message">No courses yet.</p>
-            ) : (
-              <div className="table-wrapper">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Code</th>
-                      <th>Status</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {courses.map((course) => (
-                      <tr key={course.id}>
-                        <td>{course.name}</td>
-                        <td>{course.code}</td>
-                        <td>
-                          <span className={`status-badge ${course.active ? 'success' : 'muted'}`}>
-                            {course.active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="inline-actions">
-                            <button type="button" className="link-button" onClick={() => handleEditCourse(course)}>
-                              Edit
-                            </button>
-                            <button type="button" className="link-button danger" onClick={() => handleDeleteCourse(course.id)}>
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
+          <CourseTable courses={courses} onEdit={handleEditCourse} onDelete={handleDeleteCourse} />
         </div>
 
         <RegistrationForm form={registrationForm} onChange={handleRegistrationInputChange} onSubmit={handleRegistrationSubmit} />
